@@ -27,36 +27,40 @@ export async function meleeAttack(bot, targetName) {
 
   // Wait for combat to resolve (max 30s per round)
   return new Promise(resolve => {
+    const cleanup = () => {
+      clearInterval(checkInterval);
+      clearTimeout(timeout);
+      bot.removeListener('stoppedAttacking', onStopped);
+    };
+
     const timeout = setTimeout(() => {
+      cleanup();
       bot.pvp.stop();
       resolve({ success: false, reason: 'timeout' });
     }, 30_000);
 
+    const onStopped = () => {
+      cleanup();
+      resolve({ success: false, reason: 'target_lost' });
+    };
+    bot.once('stoppedAttacking', onStopped);
+
     const checkInterval = setInterval(() => {
       // Target dead?
       if (!player.entity || entity.metadata?.[7] <= 0) {
-        clearInterval(checkInterval);
-        clearTimeout(timeout);
+        cleanup();
         bot.pvp.stop();
         resolve({ success: true, reason: 'target_killed' });
         return;
       }
       // Self low health?
       if (bot.health <= lowHealthThreshold) {
-        clearInterval(checkInterval);
-        clearTimeout(timeout);
+        cleanup();
         bot.pvp.stop();
         resolve({ success: false, reason: 'low_health', health: bot.health });
         return;
       }
     }, 500);
-
-    // pvp 'stoppedAttacking' event
-    bot.pvp.once('stoppedAttacking', () => {
-      clearInterval(checkInterval);
-      clearTimeout(timeout);
-      resolve({ success: false, reason: 'target_lost' });
-    });
   });
 }
 
