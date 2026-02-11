@@ -1,9 +1,7 @@
 import vec3 from 'vec3';
+import config from '../config.js';
 
-const POLL_INTERVAL_MS = 50;
-const PLACE_DELAY_MS = 300;
-const TIMEOUT_MS = 60_000;
-const BLOCK_NAME = 'cobblestone';
+const { pollIntervalMs: POLL_INTERVAL_MS, placeDelayMs: PLACE_DELAY_MS, timeoutMs: TIMEOUT_MS, blockName: BLOCK_NAME } = config.bridging;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
