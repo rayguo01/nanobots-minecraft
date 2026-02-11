@@ -1,0 +1,14 @@
+{
+  "name": "skywars",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "SkyWars Phase 1 — backward bridging verification",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "mineflayer": "^4.20.1",
+    "vec3": "^0.1.10"
+  }
+}
