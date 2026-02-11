@@ -1,46 +1,63 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { GoogleGenAI } from '@google/genai';
 import config from '../config.js';
 import { validateAction } from './schema.js';
 
-// --- Provider clients (lazy init) ---
+// --- Gemini REST API (no SDK dependency) ---
+
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
+async function callGemini(systemPrompt, userContent) {
+  const url = `${GEMINI_API_BASE}/models/${config.llm.model}:generateContent?key=${config.llm.apiKey}`;
+
+  const body = {
+    systemInstruction: {
+      parts: [{ text: systemPrompt }],
+    },
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: userContent }],
+      },
+    ],
+    generationConfig: {
+      maxOutputTokens: config.llm.maxTokens,
+    },
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error(`Gemini: empty response - ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return text;
+}
+
+// --- Anthropic (keep SDK for this one) ---
+
 let anthropicClient = null;
-let geminiClient = null;
-
-function getAnthropicClient() {
-  if (!anthropicClient) anthropicClient = new Anthropic({ apiKey: config.llm.apiKey });
-  return anthropicClient;
-}
-
-function getGeminiClient() {
-  if (!geminiClient) geminiClient = new GoogleGenAI({ apiKey: config.llm.apiKey });
-  return geminiClient;
-}
-
-// --- Provider-specific call implementations ---
 
 async function callAnthropic(systemPrompt, userContent) {
-  const client = getAnthropicClient();
-  const response = await client.messages.create({
+  if (!anthropicClient) {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    anthropicClient = new Anthropic({ apiKey: config.llm.apiKey });
+  }
+  const response = await anthropicClient.messages.create({
     model: config.llm.model,
     max_tokens: config.llm.maxTokens,
     system: systemPrompt,
     messages: [{ role: 'user', content: userContent }],
   });
   return response.content[0].text;
-}
-
-async function callGemini(systemPrompt, userContent) {
-  const client = getGeminiClient();
-  const response = await client.models.generateContent({
-    model: config.llm.model,
-    contents: userContent,
-    config: {
-      systemInstruction: systemPrompt,
-      maxOutputTokens: config.llm.maxTokens,
-    },
-  });
-  return response.text;
 }
 
 // --- Main entry ---
@@ -84,7 +101,7 @@ export async function getDecision(snapshot, systemPrompt) {
 
       return decision;
     } catch (err) {
-      console.log(`[llm-client] attempt ${attempt} failed: ${err.message}`);
+      console.log(`[llm-client] attempt ${attempt} failed: ${err.message?.slice(0, 300)}`);
       lastError = err.message;
     }
   }
