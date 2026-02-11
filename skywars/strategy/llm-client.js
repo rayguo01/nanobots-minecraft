@@ -1,7 +1,39 @@
 import config from '../config.js';
 import { validateAction } from './schema.js';
 
-// --- Gemini REST API (no SDK dependency) ---
+// --- OpenAI REST API (no SDK dependency) ---
+
+async function callOpenAI(systemPrompt, userContent) {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.llm.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.llm.model,
+      max_tokens: config.llm.maxTokens,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) {
+    throw new Error(`OpenAI: empty response - ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return text;
+}
+
+// --- Gemini REST API ---
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -9,18 +41,9 @@ async function callGemini(systemPrompt, userContent) {
   const url = `${GEMINI_API_BASE}/models/${config.llm.model}:generateContent?key=${config.llm.apiKey}`;
 
   const body = {
-    systemInstruction: {
-      parts: [{ text: systemPrompt }],
-    },
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: userContent }],
-      },
-    ],
-    generationConfig: {
-      maxOutputTokens: config.llm.maxTokens,
-    },
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: 'user', parts: [{ text: userContent }] }],
+    generationConfig: { maxOutputTokens: config.llm.maxTokens },
   };
 
   const res = await fetch(url, {
@@ -31,7 +54,7 @@ async function callGemini(systemPrompt, userContent) {
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Gemini API ${res.status}: ${errText}`);
+    throw new Error(`Gemini API ${res.status}: ${errText.slice(0, 300)}`);
   }
 
   const data = await res.json();
@@ -63,6 +86,7 @@ async function callAnthropic(systemPrompt, userContent) {
 // --- Main entry ---
 
 const providers = {
+  openai: callOpenAI,
   anthropic: callAnthropic,
   gemini: callGemini,
 };

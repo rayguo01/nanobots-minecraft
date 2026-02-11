@@ -1,3 +1,17 @@
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Load .env file if exists (no dotenv dependency needed)
+try {
+  const __dir = dirname(fileURLToPath(import.meta.url));
+  const envFile = readFileSync(join(__dir, '.env'), 'utf-8');
+  for (const line of envFile.split('\n')) {
+    const m = line.trim().match(/^([A-Z_]+)=(.+)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
+  }
+} catch {}
+
 const config = {
   server: {
     host: process.env.MC_HOST || 'localhost',
@@ -39,10 +53,10 @@ const config = {
     knockbackCheckRadiusBlocks: 2,
   },
   llm: {
-    // provider: 'anthropic' | 'gemini'
-    provider: 'gemini',
-    model: 'gemini-2.5-flash',
-    apiKey: 'AIzaSyCVz5Rfloi_2O2PMhcjOWuwGKxn_QADE1c',
+    // provider: 'openai' | 'gemini' | 'anthropic'
+    provider: process.env.LLM_PROVIDER || 'openai',
+    model: process.env.LLM_MODEL || 'gpt-4o-mini',
+    apiKey: process.env.LLM_API_KEY || '',
     maxTokens: 1024,
     maxRetries: 1,
   },
