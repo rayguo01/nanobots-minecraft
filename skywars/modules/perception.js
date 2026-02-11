@@ -6,6 +6,7 @@ export function generateSnapshot(bot, gameState) {
   return {
     round: gameState.round,
     phase: gameState.phase,
+    pvp_enabled: gameState.pvpEnabled || false,
     self: getSelfState(bot),
     visible_players: getVisiblePlayers(bot),
     map_state: gameState.mapState,

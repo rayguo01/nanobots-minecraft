@@ -39,10 +39,19 @@ const config = {
     knockbackCheckRadiusBlocks: 2,
   },
   llm: {
-    provider: 'anthropic',
-    model: 'claude-sonnet-4-5-20250929',
+    // provider: 'anthropic' | 'gemini'
+    // anthropic → 需要 ANTHROPIC_API_KEY，model 用 claude 系列
+    // gemini   → 需要 GEMINI_API_KEY，model 用 gemini 系列
+    provider: 'gemini',
+    model: 'gemini-2.5-flash',
     maxTokens: 1024,
     maxRetries: 1,
+  },
+  swr: {
+    mapName: 'botarena',
+    decisionIntervalMs: 12_000,
+    joinDelayMs: 5000,
+    prePvpActions: ['loot_chest', 'bridge_to', 'wait'],
   },
 };
 

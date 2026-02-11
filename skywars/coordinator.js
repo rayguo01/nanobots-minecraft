@@ -7,16 +7,53 @@ import { generateSnapshot } from './modules/perception.js';
 import { getDecision } from './strategy/llm-client.js';
 import { dispatch } from './strategy/action-dispatcher.js';
 import { PERSONAS } from './strategy/prompts.js';
+import { ChatParser } from './modules/chat-parser.js';
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/**
+ * Wait for any ChatParser in the list to emit the given event.
+ * Returns the event payload. Rejects on timeout.
+ */
+function waitForEvent(parsers, eventName, timeoutMs = 120_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timeout waiting for "${eventName}" after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    function handler(data) {
+      cleanup();
+      resolve(data);
+    }
+
+    function cleanup() {
+      clearTimeout(timer);
+      for (const p of parsers) p.removeListener(eventName, handler);
+    }
+
+    for (const p of parsers) p.once(eventName, handler);
+  });
+}
+
+/**
+ * Game phases driven by SkyWarsReloaded plugin events.
+ *
+ *   idle → joining → waiting → countdown → playing_pre_pvp → playing_pvp → ended
+ */
+const PHASES = ['idle', 'joining', 'waiting', 'countdown', 'playing_pre_pvp', 'playing_pvp', 'ended'];
 
 export class GameCoordinator {
   constructor(botConfigs) {
     this.botConfigs = botConfigs;
-    this.bots = new Map();
+    this.bots = new Map();       // username → mineflayer bot
+    this.parsers = new Map();    // username → ChatParser
+    this.phase = 'idle';
+    this.alivePlayers = new Set();
     this.gameState = {
       round: 0,
-      phase: 'early_game',
+      phase: 'waiting',
+      pvpEnabled: false,
       mapState: {
         islands_looted: [],
         bridges_built: [],
@@ -28,35 +65,57 @@ export class GameCoordinator {
   }
 
   async start() {
-    console.log(`[coordinator] starting game with ${this.botConfigs.length} bots`);
+    console.log(`[coordinator] starting SWR game with ${this.botConfigs.length} bots`);
 
+    // --- 1. Connect bots and join SkyWars ---
     await this.connectBots();
 
-    while (this.gameState.mapState.players_alive > 1 && this.gameState.round < config.game.maxRounds) {
-      this.gameState.round++;
-      this.updatePhase();
-      console.log(`\n=== Round ${this.gameState.round} (${this.gameState.phase}) ===`);
+    // --- 2. Wait for game to start (ChatParser 'game_start' event) ---
+    console.log('[coordinator] waiting for SkyWars game to start...');
+    this.phase = 'waiting';
+    try {
+      await waitForEvent([...this.parsers.values()], 'game_start', 180_000);
+    } catch (err) {
+      console.error('[coordinator] game never started:', err.message);
+      this.disconnectAll();
+      return { winner: null, rounds: 0, players: [], error: 'game_start timeout' };
+    }
 
+    this.phase = 'playing_pre_pvp';
+    this.gameState.phase = 'playing_pre_pvp';
+    console.log('[coordinator] game started! Phase: playing_pre_pvp');
+
+    // --- 3. Decision loop (core logic — unchanged) ---
+    const decisionInterval = config.swr.decisionIntervalMs;
+    while (this.phase !== 'ended') {
+      this.gameState.round++;
+      this.gameState.phase = this.phase;
+      this.gameState.mapState.players_alive = this.alivePlayers.size;
+
+      console.log(`\n=== Decision cycle ${this.gameState.round} (${this.phase}) | alive: ${this.alivePlayers.size} ===`);
+
+      // Exactly the same: parallel collect → sequential dispatch
       const decisions = await this.collectDecisions();
 
       for (const [username, decision] of decisions) {
-        if (!this.isAlive(username)) continue;
+        if (!this.alivePlayers.has(username)) continue;
         console.log(`[coordinator] ${username} → ${decision.action}: ${decision.reasoning?.slice(0, 80)}`);
         const result = await dispatch(this.bots.get(username), decision, mapConfig);
         this.recordEvent(username, decision, result);
       }
 
-      this.checkDeaths();
+      // No more checkDeaths() — ChatParser events update alivePlayers automatically
 
-      console.log(`[coordinator] alive: ${this.gameState.mapState.players_alive}, dead: ${this.gameState.mapState.players_dead.join(', ') || 'none'}`);
+      console.log(`[coordinator] alive: ${[...this.alivePlayers].join(', ') || 'none'}, dead: ${this.gameState.mapState.players_dead.join(', ') || 'none'}`);
 
-      await sleep(2000);
+      await sleep(decisionInterval);
     }
 
-    const winner = this.getAlivePlayers();
-    console.log(`\n=== GAME OVER ===`);
+    // --- 4. Game over ---
+    const winner = [...this.alivePlayers];
+    console.log('\n=== GAME OVER ===');
     console.log(`Winner: ${winner.length > 0 ? winner.join(', ') : 'no one (draw)'}`);
-    console.log(`Total rounds: ${this.gameState.round}`);
+    console.log(`Total decision cycles: ${this.gameState.round}`);
 
     const result = {
       winner: winner[0] || null,
@@ -64,7 +123,7 @@ export class GameCoordinator {
       players: this.botConfigs.map(cfg => ({
         name: cfg.username,
         persona: cfg.persona,
-        survived: this.isAlive(cfg.username),
+        survived: this.alivePlayers.has(cfg.username),
       })),
     };
 
@@ -73,10 +132,13 @@ export class GameCoordinator {
   }
 
   async connectBots() {
+    this.phase = 'joining';
+    const joinDelay = config.swr.joinDelayMs;
+
     for (let i = 0; i < this.botConfigs.length; i++) {
       const cfg = this.botConfigs[i];
 
-      if (i > 0) await sleep(5000); // connection throttle
+      if (i > 0) await sleep(joinDelay);
 
       const bot = mineflayer.createBot({
         ...config.server,
@@ -88,19 +150,95 @@ export class GameCoordinator {
       await new Promise(r => bot.once('spawn', r));
       await sleep(1000);
 
-      const island = mapConfig.spawnIslands[i];
-      const pos = mapConfig.islands[island];
-      bot.chat(`/tp ${cfg.username} ${pos.x} ${pos.y} ${pos.z}`);
-      bot.chat(`/give ${cfg.username} cobblestone 64`);
-      await sleep(500);
+      // Create ChatParser and wire up lifecycle events
+      const parser = new ChatParser(bot);
+      this._bindParserEvents(parser, cfg.username);
 
       this.bots.set(cfg.username, bot);
-      console.log(`[coordinator] ${cfg.username} (${cfg.persona}) spawned on ${island}`);
+      this.parsers.set(cfg.username, parser);
+      this.alivePlayers.add(cfg.username);
+
+      // Join SkyWars via plugin command (replaces /tp + /give)
+      bot.chat('/sw join');
+      console.log(`[coordinator] ${cfg.username} (${cfg.persona}) joined SkyWars`);
     }
   }
 
+  /**
+   * Bind ChatParser events to update game state.
+   * This runs passively in the background — does NOT interfere with the decision loop.
+   */
+  _bindParserEvents(parser, botUsername) {
+    parser.on('countdown', ({ seconds }) => {
+      if (this.phase === 'waiting' || this.phase === 'joining') {
+        this.phase = 'countdown';
+      }
+      console.log(`[coordinator] countdown: ${seconds}s`);
+    });
+
+    parser.on('game_start', () => {
+      if (this.phase !== 'playing_pre_pvp' && this.phase !== 'playing_pvp') {
+        this.phase = 'playing_pre_pvp';
+        this.gameState.phase = 'playing_pre_pvp';
+      }
+    });
+
+    parser.on('pvp_enabled', () => {
+      this.phase = 'playing_pvp';
+      this.gameState.phase = 'playing_pvp';
+      this.gameState.pvpEnabled = true;
+      this.gameState.recentEvents.push('PVP is now enabled!');
+      console.log('[coordinator] PVP enabled!');
+    });
+
+    parser.on('player_kill', ({ victim, killer }) => {
+      this._markDead(victim);
+      const event = `${victim} was killed by ${killer}`;
+      this.gameState.recentEvents.push(event);
+      console.log(`[coordinator] KILL: ${event}`);
+    });
+
+    parser.on('player_death', ({ player, cause }) => {
+      this._markDead(player);
+      const event = `${player} died (${cause})`;
+      this.gameState.recentEvents.push(event);
+      console.log(`[coordinator] DEATH: ${event}`);
+    });
+
+    parser.on('game_won', ({ player, map }) => {
+      this.phase = 'ended';
+      this.gameState.recentEvents.push(`${player} won the game on ${map}`);
+      console.log(`[coordinator] WINNER: ${player} on map ${map}`);
+    });
+
+    parser.on('game_lost', ({ player, map }) => {
+      this.gameState.recentEvents.push(`${player} lost the game on ${map}`);
+      console.log(`[coordinator] LOST: ${player} on map ${map}`);
+    });
+
+    parser.on('game_join', ({ player, count, max }) => {
+      console.log(`[coordinator] SWR join: ${player} (${count}/${max})`);
+    });
+
+    parser.on('game_leave', ({ player }) => {
+      this._markDead(player);
+      console.log(`[coordinator] SWR leave: ${player}`);
+    });
+  }
+
+  _markDead(username) {
+    if (this.alivePlayers.has(username)) {
+      this.alivePlayers.delete(username);
+      this.gameState.mapState.players_dead.push(username);
+      this.gameState.mapState.players_alive = this.alivePlayers.size;
+    }
+  }
+
+  /**
+   * Collect LLM decisions for all alive players — UNCHANGED from original.
+   */
   async collectDecisions() {
-    const alivePlayers = this.getAlivePlayers();
+    const alivePlayers = [...this.alivePlayers];
     const decisionPromises = alivePlayers.map(async (username) => {
       const bot = this.bots.get(username);
       const cfg = this.botConfigs.find(c => c.username === username);
@@ -118,45 +256,14 @@ export class GameCoordinator {
       .map(r => r.value);
   }
 
-  isAlive(username) {
-    return !this.gameState.mapState.players_dead.includes(username);
-  }
-
-  getAlivePlayers() {
-    return this.botConfigs
-      .map(c => c.username)
-      .filter(u => this.isAlive(u));
-  }
-
-  checkDeaths() {
-    for (const [username, bot] of this.bots) {
-      if (!this.isAlive(username)) continue;
-      if (bot.entity.position.y < 0 || bot.health <= 0) {
-        this.gameState.mapState.players_dead.push(username);
-        this.gameState.mapState.players_alive--;
-        this.gameState.recentEvents.push(`${username} died (Round ${this.gameState.round})`);
-        console.log(`[coordinator] ${username} DIED`);
-      }
-    }
-  }
-
   recordEvent(username, decision, result) {
     const summary = `${username}: ${decision.action} → ${result.success !== false ? 'success' : result.reason || 'failed'}`;
-    this.gameState.recentEvents.push(`${summary} (Round ${this.gameState.round})`);
-  }
-
-  updatePhase() {
-    const r = this.gameState.round;
-    if (r <= 3) this.gameState.phase = 'early_game';
-    else if (r <= 10) this.gameState.phase = 'mid_game';
-    else if (r <= 20) this.gameState.phase = 'late_game';
-    else this.gameState.phase = 'final';
+    this.gameState.recentEvents.push(summary);
   }
 
   disconnectAll() {
-    for (const [, bot] of this.bots) {
-      bot.quit();
-    }
+    for (const [, parser] of this.parsers) parser.destroy();
+    for (const [, bot] of this.bots) bot.quit();
   }
 }
 

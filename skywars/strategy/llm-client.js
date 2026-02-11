@@ -1,10 +1,62 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import config from '../config.js';
 import { validateAction } from './schema.js';
 
-const client = new Anthropic();
+// --- Provider clients (lazy init) ---
+let anthropicClient = null;
+let geminiClient = null;
+
+function getAnthropicClient() {
+  if (!anthropicClient) anthropicClient = new Anthropic();
+  return anthropicClient;
+}
+
+function getGeminiClient() {
+  if (!geminiClient) geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  return geminiClient;
+}
+
+// --- Provider-specific call implementations ---
+
+async function callAnthropic(systemPrompt, userContent) {
+  const client = getAnthropicClient();
+  const response = await client.messages.create({
+    model: config.llm.model,
+    max_tokens: config.llm.maxTokens,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userContent }],
+  });
+  return response.content[0].text;
+}
+
+async function callGemini(systemPrompt, userContent) {
+  const client = getGeminiClient();
+  const response = await client.models.generateContent({
+    model: config.llm.model,
+    contents: userContent,
+    config: {
+      systemInstruction: systemPrompt,
+      maxOutputTokens: config.llm.maxTokens,
+    },
+  });
+  return response.text;
+}
+
+// --- Main entry ---
+
+const providers = {
+  anthropic: callAnthropic,
+  gemini: callGemini,
+};
 
 export async function getDecision(snapshot, systemPrompt) {
+  const provider = providers[config.llm.provider];
+  if (!provider) {
+    console.log(`[llm-client] unknown provider: ${config.llm.provider}, defaulting to wait`);
+    return { reasoning: 'unknown LLM provider', action: 'wait', params: {} };
+  }
+
   const userMessage = `当前状态：\n${JSON.stringify(snapshot, null, 2)}\n\n请选择你的行动。以 JSON 格式回复，包含 reasoning、action、params 字段。`;
 
   let lastError = '';
@@ -14,14 +66,8 @@ export async function getDecision(snapshot, systemPrompt) {
         ? userMessage
         : `${userMessage}\n\n上次回复格式有误: ${lastError}。请严格按 JSON 格式回复。`;
 
-      const response = await client.messages.create({
-        model: config.llm.model,
-        max_tokens: config.llm.maxTokens,
-        system: systemPrompt,
-        messages: [{ role: 'user', content }],
-      });
+      const text = await provider(systemPrompt, content);
 
-      const text = response.content[0].text;
       // Extract JSON from response (may be wrapped in markdown code block)
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
