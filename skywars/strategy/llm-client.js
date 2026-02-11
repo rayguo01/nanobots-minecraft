@@ -8,12 +8,12 @@ let anthropicClient = null;
 let geminiClient = null;
 
 function getAnthropicClient() {
-  if (!anthropicClient) anthropicClient = new Anthropic();
+  if (!anthropicClient) anthropicClient = new Anthropic({ apiKey: config.llm.apiKey });
   return anthropicClient;
 }
 
 function getGeminiClient() {
-  if (!geminiClient) geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  if (!geminiClient) geminiClient = new GoogleGenAI({ apiKey: config.llm.apiKey });
   return geminiClient;
 }
 

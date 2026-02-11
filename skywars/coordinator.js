@@ -70,15 +70,18 @@ export class GameCoordinator {
     // --- 1. Connect bots and join SkyWars ---
     await this.connectBots();
 
-    // --- 2. Wait for game to start (ChatParser 'game_start' event) ---
-    console.log('[coordinator] waiting for SkyWars game to start...');
-    this.phase = 'waiting';
-    try {
-      await waitForEvent([...this.parsers.values()], 'game_start', 180_000);
-    } catch (err) {
-      console.error('[coordinator] game never started:', err.message);
-      this.disconnectAll();
-      return { winner: null, rounds: 0, players: [], error: 'game_start timeout' };
+    // --- 2. Wait for game to start ---
+    // Game may have already started during connectBots (countdown triggered by minPlayers)
+    if (this.phase !== 'playing_pre_pvp' && this.phase !== 'playing_pvp') {
+      console.log('[coordinator] waiting for SkyWars game to start...');
+      this.phase = 'waiting';
+      try {
+        await waitForEvent([...this.parsers.values()], 'game_start', 180_000);
+      } catch (err) {
+        console.error('[coordinator] game never started:', err.message);
+        this.disconnectAll();
+        return { winner: null, rounds: 0, players: [], error: 'game_start timeout' };
+      }
     }
 
     this.phase = 'playing_pre_pvp';

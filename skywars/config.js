@@ -40,10 +40,9 @@ const config = {
   },
   llm: {
     // provider: 'anthropic' | 'gemini'
-    // anthropic → 需要 ANTHROPIC_API_KEY，model 用 claude 系列
-    // gemini   → 需要 GEMINI_API_KEY，model 用 gemini 系列
     provider: 'gemini',
     model: 'gemini-2.5-flash',
+    apiKey: 'AIzaSyCVz5Rfloi_2O2PMhcjOWuwGKxn_QADE1c',
     maxTokens: 1024,
     maxRetries: 1,
   },
