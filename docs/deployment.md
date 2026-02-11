@@ -76,8 +76,5 @@
 
   6. 如果需要外网访问
 
-  # 开放防火墙端口
-  sudo ufw allow 3000/tcp
-
-  # 或用 nginx 反向代理（推荐）
+  # 用 nginx 反向代理（推荐）
   sudo apt install nginx
