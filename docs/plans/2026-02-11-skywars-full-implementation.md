@@ -15,6 +15,52 @@
 - ✅ Phase 1: `skywars/modules/bridging.js` — 后退搭路，10 格 cobblestone 精准直线放置
 - ✅ `skywars/index.js` — bot 连接/spawn/搭路测试入口
 - ✅ `skywars/setup-platforms.js` — 测试平台搭建脚本
+- ✅ Phase 2-5: 全部 16 个 Task 实施完成（2026-02-11）
+
+### Phase 2-5 实施总结
+
+**提交记录（6 commits → main）：**
+
+1. `981c441` feat(skywars): add shared config module
+2. `39ef709` feat(skywars): add loot and combat modules, refactor bridging to use shared config
+3. `c132dfd` test(skywars): add Phase 2 tests — loot, combat, integration pipeline
+4. `d9feae1` feat(skywars): add LLM strategy layer — perception, client, schema, prompts, dispatcher
+5. `d07f21a` feat(skywars): add Game Coordinator, arena setup, and match tests
+6. `248d557` feat(skywars): add match statistics and tournament manager
+
+**实测验证：**
+
+| 模块 | 结果 | 说明 |
+|------|------|------|
+| 搭路 (bridging) | ✅ 通过 | 10 格精准直线，Z 坐标始终不偏移 |
+| 战斗 (combat) | ✅ 通过 | 双 bot 连接 + pvp 近战循环正常运行 |
+| Arena 搭建 | ✅ 通过 | 9 个岛屿（8 出生岛 + 中岛）全部创建，每岛有箱子 |
+| Stats 统计 | ✅ 通过 | 胜率计算、JSON 导出均正确 |
+
+**实施过程中的 bug 修复：**
+
+- `mineflayer-pvp` 的 `bot.pvp` 不是 EventEmitter，`stoppedAttacking` 事件需要在 `bot` 上监听
+- Paper 服务器 `connection-throttle: 4000ms`，多 bot 连接需间隔 ≥5 秒
+- `placeBlock` 的 face vector 不能为 `(0,0,0)`，需用整数块坐标差计算
+- `ops.json` 热编辑不生效，需通过已有 OP bot（ray）在游戏内执行 `/op`
+
+**运行方式：**
+
+```bash
+# 搭建竞技场（首次运行）
+cd skywars && node tests/setup-arena.js
+
+# 启动完整对战（需要 Claude API Key）
+ANTHROPIC_API_KEY=sk-xxx node coordinator.js 4
+
+# 或运行锦标赛
+# 需在代码中导入 MatchManager 使用
+```
+
+**服务器配置备忘：**
+
+- 已 OP 的 bot 账号：`SkyWars_Test`, `ray`, `CombatAttacker`, `CombatDummy`, `IntegBot`, `IntegDummy`, `LootTest`, `ArenaBuilder`, `Bot_Aggressive`, `Bot_Cautious`, `Bot_Controller`, `Bot_Gambler`, `Test_Aggro`, `Test_Cautious`
+- Arena 位置：以 (0, 65, 0) 为中心，半径 30 格圆形排列
 
 ## 目标目录结构
 
